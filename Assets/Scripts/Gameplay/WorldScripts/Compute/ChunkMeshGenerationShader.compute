@@ -1,0 +1,257 @@
+#include "CubeData.compute"
+#pragma kernel CSMain
+
+static const int DRAW_SELF = 1;
+static const int DRAW_NEIGHBOUR_SIMILAR = 2;
+static const int DRAW_NEIGHBOUR_DIFFERENT = 4;
+static const int ALL_SIDES_SAME = 8;
+static const int IS_FLUID = 16;
+
+static const int CHUNK_SIZE_1 = 32;
+static const int CHUNK_SIZE_2 = CHUNK_SIZE_1 * CHUNK_SIZE_1;
+static const int CHUNK_SIZE_3 = CHUNK_SIZE_1 * CHUNK_SIZE_1 * CHUNK_SIZE_1;
+
+struct ShaderVoxelTypeData
+{
+    int config;
+    int generateCriteria;
+    
+    int2 yPosUVIndex;
+    int2 yNegUVIndex;
+    
+    int2 zPosUVIndex;
+    int2 zNegUVIndex;
+    
+    int2 xPosUVIndex;
+    int2 xNegUVIndex;
+};
+
+struct ShaderVoxelData
+{
+    int id;
+    int state;
+};
+
+struct Face
+{
+    int SubMesh;
+    
+    float3 vertA;
+    float3 vertB;
+    float3 vertC;
+    float3 vertD;
+    
+    float2 uvsA;
+    float2 uvsB;
+    float2 uvsC;
+    float2 uvsD;
+};
+
+float uvIncrementX;
+float uvIncrementY;
+
+AppendStructuredBuffer<Face> faces;
+RWStructuredBuffer<ShaderVoxelTypeData> types;
+RWStructuredBuffer<ShaderVoxelData> data;
+RWStructuredBuffer<ShaderVoxelData> neighbourData;
+
+inline ShaderVoxelData GetData(int3 pos)
+{
+    return data[(CHUNK_SIZE_2 * pos.z) + (CHUNK_SIZE_1 * pos.y) + pos.x];
+}
+
+inline ShaderVoxelData GetNeighbourChunkData(int index, int3 pos)
+{
+    return neighbourData[(CHUNK_SIZE_3 * index) + (CHUNK_SIZE_2 * pos.z) + (CHUNK_SIZE_1 * pos.y) + pos.x];
+}
+
+inline ShaderVoxelTypeData GetType(int3 pos)
+{
+    return types[GetData(pos).id];
+}
+
+inline ShaderVoxelTypeData GetNeighbourChunkType(int index, int3 pos)
+{
+    return types[GetNeighbourChunkData(index, pos).id];
+}
+
+ShaderVoxelData GetNeighbourVoxel(int3 pos, int direction)
+{
+    ShaderVoxelData type;
+    
+    int yMax = ((pos.y == CHUNK_SIZE_1 - 1) && (direction == 0));
+    int yMin = ((pos.y == 0) && (direction == 1));
+    int zMax = ((pos.z == CHUNK_SIZE_1 - 1) && (direction == 2));
+    int zMin = ((pos.z == 0) && (direction == 3));
+    int xMax = ((pos.x == CHUNK_SIZE_1 - 1) && (direction == 4));
+    int xMin = ((pos.x == 0) && (direction == 5));
+    
+    if (yMax | yMin | zMax | zMin | xMax | xMin)
+    {
+        int3 Offset = int3(0, 0, 0);
+        
+        Offset =
+            yMax * int3(pos.x, 0, pos.z) +
+            yMin * int3(pos.x, CHUNK_SIZE_1 - 1, pos.z) +
+            zMax * int3(pos.x, pos.y, 0) +
+            zMin * int3(pos.x, pos.y, CHUNK_SIZE_1 - 1) +
+            xMax * int3(0, pos.y, pos.z) +
+            xMin * int3(CHUNK_SIZE_1 - 1, pos.y, pos.z);
+        
+        return GetNeighbourChunkData(direction, int3(pos.x, 0, pos.z));
+    }
+    else
+    {
+        int3 Offset = int3(0, 0, 0);
+        
+        Offset =
+            (direction == 0) * int3(0, 1, 0) +
+            (direction == 1) * int3(0, -1, 0) +
+            (direction == 2) * int3(0, 0, 1) +
+            (direction == 3) * int3(0, 0, -1) +
+            (direction == 4) * int3(1, 0, 0) +
+            (direction == 5) * int3(-1, 0, 0);
+        
+        return GetData(pos + Offset);
+    }
+    
+    /*
+    switch (direction)
+    {
+        //Y+
+        case 0:
+            if (MaxY)
+                type = 
+            else
+                type = 
+            break;
+        //Y-
+        case 1:
+            if (MinY)
+                type = GetNeighbourChunkData(1, int3(pos.x, CHUNK_SIZE_1 - 1, pos.z));
+            else
+                type = GetData(pos + int3(0, -1, 0));
+            break;
+        
+        //Z+
+        case 2:
+            if (MaxZ)
+                type = GetNeighbourChunkData(2, int3(pos.x, pos.y, 0));
+            else
+                type = GetData(pos + int3(0, 0, 1));
+            break;
+        //Z-
+        case 3:
+            if (MinZ)
+                type = GetNeighbourChunkData(3, int3(pos.x, pos.y, CHUNK_SIZE_1 - 1));
+            else
+                type = GetData(pos + int3(0, 0, -1));
+            break;
+        
+        //X+
+        case 4:
+            if (MaxX)
+                type = GetNeighbourChunkData(4, int3(0, pos.y, pos.z));
+            else
+                type = GetData(pos + int3(1, 0, 0));
+            break;
+        //X-
+        case 5:
+            if (MinX)
+                type = GetNeighbourChunkData(5, int3(CHUNK_SIZE_1 - 1, pos.y, pos.z));
+            else
+                type = GetData(pos + int3(-1, 0, 0));
+            break;
+        default:
+            break;
+    }
+    
+    return type;
+    */
+}
+
+Face SampleTexture(Face face, int3 id, int direction, ShaderVoxelTypeData type)
+{
+    int2 uvIndex = int2(0, 0);
+    
+    int SidesSame = (type.config & ALL_SIDES_SAME) >> 3;
+    int SidesDiff = 1 - SidesSame;
+    
+    uvIndex += SidesSame * type.xPosUVIndex;
+    
+    uvIndex += SidesDiff * (direction == 0) * type.yPosUVIndex;
+    uvIndex += SidesDiff * (direction == 1) * type.yNegUVIndex;
+    uvIndex += SidesDiff * (direction == 2) * type.zPosUVIndex;
+    uvIndex += SidesDiff * (direction == 3) * type.zNegUVIndex;
+    uvIndex += SidesDiff * (direction == 4) * type.xPosUVIndex;
+    uvIndex += SidesDiff * (direction == 5) * type.xNegUVIndex;
+    
+    face.uvsA = float2(uvIncrementX * (uvIndex.x + 0.0), uvIncrementX * (uvIndex.y + 1.0));
+    face.uvsB = float2(uvIncrementX * (uvIndex.x + 1.0), uvIncrementX * (uvIndex.y + 1.0));
+    face.uvsC = float2(uvIncrementX * (uvIndex.x + 1.0), uvIncrementX * (uvIndex.y + 0.0));
+    face.uvsD = float2(uvIncrementX * (uvIndex.x + 0.0), uvIncrementX * (uvIndex.y + 0.0));
+    
+    return face;
+}
+
+Face GenerateFace(int3 _offset, int direction, bool fluid)
+{
+    Face face;
+    
+    float3 offset = float3(_offset.x, _offset.y, _offset.z);
+    
+
+    if (fluid)
+    {
+        face.vertA = FluidFaceVerticies[direction][0] + offset;
+        face.vertB = FluidFaceVerticies[direction][1] + offset;
+        face.vertC = FluidFaceVerticies[direction][2] + offset;
+        face.vertD = FluidFaceVerticies[direction][3] + offset;
+    }
+    else
+    {
+        face.vertA = FaceVerticies[direction][0] + offset;
+        face.vertB = FaceVerticies[direction][1] + offset;
+        face.vertC = FaceVerticies[direction][2] + offset;
+        face.vertD = FaceVerticies[direction][3] + offset;
+    }
+
+    return face;
+}
+
+void ExecuteFace(int3 id, int i, ShaderVoxelTypeData type, ShaderVoxelData data, bool fluid)
+{
+    ShaderVoxelData ndata = GetNeighbourVoxel(id, i);
+    ShaderVoxelTypeData ntype = types[ndata.id];
+    
+    bool sameType = data.id == ndata.id;
+    
+    if (
+        ndata.id == 0 ||
+        ((sameType) && (ntype.config & DRAW_NEIGHBOUR_SIMILAR)) ||
+        ((!sameType) && (ntype.config & DRAW_NEIGHBOUR_DIFFERENT)))
+    {
+        Face face = GenerateFace(id, i, fluid);
+        face = SampleTexture(face, id, i, type);
+        face.SubMesh = type.generateCriteria;
+        faces.Append(face);
+    }
+}
+
+[numthreads(16,4,16)]
+void CSMain (int3 id : SV_DispatchThreadID)
+{
+    if (id.x > CHUNK_SIZE_1 - 1 || id.y > CHUNK_SIZE_1 - 1 || id.z > CHUNK_SIZE_1 - 1)
+        return;
+    
+    ShaderVoxelData data = GetData(id);
+    ShaderVoxelTypeData type = GetType(id);
+    
+    if (type.config & DRAW_SELF)
+    {
+        for (int i = 0; i < 6; i++)
+        {
+            ExecuteFace(id, i, type, data, (type.config & IS_FLUID) && GetNeighbourVoxel(id, 0).id != data.id);
+        }
+    }
+}

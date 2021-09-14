@@ -1,0 +1,114 @@
+#include "CubeData.compute"
+#pragma kernel CSMain
+
+static const int CHUNK_SIZE_1 = 32;
+static const int CHUNK_SIZE_2 = CHUNK_SIZE_1 * CHUNK_SIZE_1;
+static const int CHUNK_SIZE_3 = CHUNK_SIZE_1 * CHUNK_SIZE_1 * CHUNK_SIZE_1;
+
+struct ShaderVoxelData
+{
+    int Collidable;
+};
+
+struct Face
+{
+    float3 vertA;
+    float3 vertB;
+    float3 vertC;
+    float3 vertD;
+};
+
+AppendStructuredBuffer<Face> faces;
+RWStructuredBuffer<ShaderVoxelData> data;
+
+ShaderVoxelData GetData(int3 pos)
+{
+    return data[(CHUNK_SIZE_2 * pos.z) + (CHUNK_SIZE_1 * pos.y) + pos.x];
+}
+
+ShaderVoxelData GetNeighbourVoxel(int3 pos, int direction)
+{
+    ShaderVoxelData type;
+    
+    switch (direction)
+    {
+        //Y+
+        case 0:
+            if (pos.y < CHUNK_SIZE_1 - 1)
+                type = GetData(pos + int3(0, 1, 0));
+            break;
+        //Y-
+        case 1:
+            if (pos.y > 0)
+                type = GetData(pos + int3(0, -1, 0));
+            break;
+        
+        //Z+
+        case 2:
+            if (pos.z < CHUNK_SIZE_1 - 1)
+                type = GetData(pos + int3(0, 0, 1));
+            break;
+        //Z-
+        case 3:
+            if (pos.z > 0)
+                type = GetData(pos + int3(0, 0, -1));
+            break;
+        
+        //X+
+        case 4:
+            if (pos.x < CHUNK_SIZE_1 - 1)
+                type = GetData(pos + int3(1, 0, 0));
+            break;
+        //X-
+        case 5:
+            if (pos.x > 0)
+                type = GetData(pos + int3(-1, 0, 0));
+            break;
+        default:
+            break;
+    }
+    
+    return type;
+}
+
+Face GenerateFace(int3 _offset, int direction)
+{
+    Face face;
+    
+    float3 offset = float3(_offset.x, _offset.y, _offset.z);
+    
+    face.vertA = FaceVerticies[direction][0] + offset;
+    face.vertB = FaceVerticies[direction][1] + offset;
+    face.vertC = FaceVerticies[direction][2] + offset;
+    face.vertD = FaceVerticies[direction][3] + offset;
+
+    return face;
+}
+
+void ExecuteFace(int3 id, int i, ShaderVoxelData data)
+{
+    ShaderVoxelData ndata = GetNeighbourVoxel(id, i);
+    
+    if (ndata.Collidable != 1)
+    {
+        Face face = GenerateFace(id, i);
+        faces.Append(face);
+    }
+}
+
+[numthreads(16, 4, 16)]
+void CSMain(int3 id : SV_DispatchThreadID)
+{
+    if (id.x > CHUNK_SIZE_1 - 1 || id.y > CHUNK_SIZE_1 - 1 || id.z > CHUNK_SIZE_1 - 1)
+        return;
+    
+    ShaderVoxelData data = GetData(id);
+    
+    for (int i = 0; i < 6; i++)
+    {
+        if (data.Collidable == 1)
+        {
+            ExecuteFace(id, i, data);
+        }
+    }
+}

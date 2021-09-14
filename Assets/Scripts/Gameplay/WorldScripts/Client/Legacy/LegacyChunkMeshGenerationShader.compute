@@ -1,0 +1,213 @@
+#pragma kernel CSMain
+
+static const int DRAW_SELF = 1;
+static const int DRAW_NEIGHBOUR = 2;
+static const int TRANSPARENT = 4;
+
+struct CubeData
+{
+    int state;
+    
+    int2 topUVIndex;
+    int2 sideUVIndex;
+    int2 bottomUVIndex;
+};
+
+struct Face
+{
+    float3 vertA;
+    float3 vertB;
+    float3 vertC;
+    float3 vertD;
+    
+    float2 uvsA;
+    float2 uvsB;
+    float2 uvsC;
+    float2 uvsD;
+};
+
+float uvIncrementX;
+float uvIncrementY;
+
+int isTransparent;
+
+AppendStructuredBuffer<Face> faces;
+RWStructuredBuffer<CubeData> data;
+RWStructuredBuffer<CubeData> neighbourData;
+
+CubeData GetData(int3 pos)
+{
+    return data[(256 * pos.z) + (16 * pos.y) + pos.x];
+}
+
+CubeData GetNeighbourData(int index, int3 pos)
+{
+    return neighbourData[(4096 * index) + (256 * pos.z) + (16 * pos.y) + pos.x];
+}
+
+Face SampleTexture(Face face, int3 id, int direction)
+{
+    int2 uvIndex;
+    switch (direction)
+    {
+        //Y+
+        case 0:
+            uvIndex = GetData(id).topUVIndex;
+            break;
+        //Y-
+        case 1:
+            uvIndex = GetData(id).bottomUVIndex;
+            break;
+        
+        default:
+            uvIndex = GetData(id).sideUVIndex;
+            break;
+    }
+    
+    face.uvsA = float2(uvIncrementX * (uvIndex.x + 0.0), uvIncrementX * (uvIndex.y + 1.0));
+    face.uvsB = float2(uvIncrementX * (uvIndex.x + 1.0), uvIncrementX * (uvIndex.y + 1.0));
+    face.uvsC = float2(uvIncrementX * (uvIndex.x + 1.0), uvIncrementX * (uvIndex.y + 0.0));
+    face.uvsD = float2(uvIncrementX * (uvIndex.x + 0.0), uvIncrementX * (uvIndex.y + 0.0));
+    
+    return face;
+}
+
+Face GenerateFace(int3 offset, int direction)
+{
+    Face face;
+    
+    switch (direction)
+    {
+        //Y+
+        case 0:
+            face.vertA = float3(0.0, 1.0, 1.0);
+            face.vertB = float3(1.0, 1.0, 1.0);
+            face.vertC = float3(1.0, 1.0, 0.0);
+            face.vertD = float3(0.0, 1.0, 0.0);
+            break;
+        //Y-
+        case 1:
+            face.vertA = float3(1.0, 0.0, 1.0);
+            face.vertB = float3(0.0, 0.0, 1.0);
+            face.vertC = float3(0.0, 0.0, 0.0);
+            face.vertD = float3(1.0, 0.0, 0.0);
+            break;
+        
+        //Z+
+        case 2:
+            face.vertA = float3(1.0, 1.0, 1.0);
+            face.vertB = float3(0.0, 1.0, 1.0);
+            face.vertC = float3(0.0, 0.0, 1.0);
+            face.vertD = float3(1.0, 0.0, 1.0);
+            break;
+        //Z-
+        case 3:
+            face.vertA = float3(0.0, 1.0, 0.0);
+            face.vertB = float3(1.0, 1.0, 0.0);
+            face.vertC = float3(1.0, 0.0, 0.0);
+            face.vertD = float3(0.0, 0.0, 0.0);
+            break;
+        
+        //X+
+        case 4:
+            face.vertA = float3(1.0, 1.0, 0.0);
+            face.vertB = float3(1.0, 1.0, 1.0);
+            face.vertC = float3(1.0, 0.0, 1.0);
+            face.vertD = float3(1.0, 0.0, 0.0);
+            break;
+        //X-
+        case 5:
+            face.vertA = float3(0.0, 1.0, 1.0);
+            face.vertB = float3(0.0, 1.0, 0.0);
+            face.vertC = float3(0.0, 0.0, 0.0);
+            face.vertD = float3(0.0, 0.0, 1.0);  
+            break;
+        default:
+            face.vertA = float3(0.0, 0.0, 0.0);
+            face.vertB = float3(0.0, 0.0, 0.0);
+            face.vertC = float3(0.0, 0.0, 0.0);
+            face.vertD = float3(0.0, 0.0, 0.0);
+            break;
+
+    }
+    
+    face.vertA = face.vertA + float3(offset.x, offset.y, offset.z);
+    face.vertB = face.vertB + float3(offset.x, offset.y, offset.z);
+    face.vertC = face.vertC + float3(offset.x, offset.y, offset.z);
+    face.vertD = face.vertD + float3(offset.x, offset.y, offset.z);
+    
+    return face;
+}
+
+bool CheckDrawFace(int3 pos, int direction)
+{
+    switch (direction)
+    {
+        //Y+
+        case 0:
+            if (pos.y == 15)
+                return GetNeighbourData(0, int3(pos.x, 0, pos.z)).state & DRAW_NEIGHBOUR;
+            else
+                return GetData(pos + int3(0, 1, 0)).state & DRAW_NEIGHBOUR;
+        //Y-
+        case 1:
+            if (pos.y == 0)
+                return GetNeighbourData(1, int3(pos.x, 15, pos.z)).state & DRAW_NEIGHBOUR;
+            else
+                return GetData(pos + int3(0, -1, 0)).state & DRAW_NEIGHBOUR;
+        
+        //Z+
+        case 2:
+            if (pos.z == 15)
+                return GetNeighbourData(2, int3(pos.x, pos.y, 0)).state & DRAW_NEIGHBOUR;
+            else
+                return GetData(pos + int3(0, 0, 1)).state & DRAW_NEIGHBOUR;
+        //Z-
+        case 3:
+            if (pos.z == 0)
+                return GetNeighbourData(3, int3(pos.x, pos.y, 15)).state & DRAW_NEIGHBOUR;
+            else
+                return GetData(pos + int3(0, 0, -1)).state & DRAW_NEIGHBOUR;
+        
+        //X+
+        case 4:
+            if (pos.x == 15)
+                return GetNeighbourData(4, int3(0, pos.y, pos.z)).state & DRAW_NEIGHBOUR;
+            else
+                return GetData(pos + int3(1, 0, 0)).state & DRAW_NEIGHBOUR;
+        //X-
+        case 5:
+            if (pos.x == 0)
+                return GetNeighbourData(5, int3(15, pos.y, pos.z)).state & DRAW_NEIGHBOUR;
+            else
+                return GetData(pos + int3(-1, 0, 0)).state & DRAW_NEIGHBOUR;
+        
+        default:
+            return false;
+    }
+}
+
+void ExecuteFace(int3 id, int i)
+{
+    if (CheckDrawFace(id, i))
+    {
+        Face face = GenerateFace(id, i);
+        face = SampleTexture(face, id, i);
+        faces.Append(face);
+    }
+}
+
+[numthreads(16,16,4)]
+void CSMain (int3 id : SV_DispatchThreadID)
+{
+    CubeData data = GetData(id);
+    if ((data.state & DRAW_SELF) && ((data.state & TRANSPARENT) == isTransparent))
+    {
+        ExecuteFace(id, 0);
+        ExecuteFace(id, 1);
+        ExecuteFace(id, 2);
+        ExecuteFace(id, 3);
+        ExecuteFace(id, 4);
+        ExecuteFace(id, 5);
+    }
+}

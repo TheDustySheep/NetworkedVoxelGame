@@ -1,0 +1,18 @@
+#pragma kernel CSMain
+
+static const float2 centre = float2(16, 16);
+
+int undergroundDepth;
+float renderDistance;
+int playerPosX;
+int playerPosY;
+AppendStructuredBuffer<int3> chunks;
+
+[numthreads(32,1,32)]
+void CSMain (int3 id : SV_DispatchThreadID)
+{
+    if (distance(float2(id.x, id.z), centre) < renderDistance)
+    {
+        chunks.Append(id + int3(playerPosX - centre.x, undergroundDepth, playerPosY - centre.y));
+    }
+}
